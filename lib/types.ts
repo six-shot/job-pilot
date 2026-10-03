@@ -1,0 +1,74 @@
+export const SOURCES = ["mercor", "micro1", "handshake", "g2i"] as const;
+export type Source = (typeof SOURCES)[number];
+
+export interface Job {
+  key: string; // `${source}/${id}`
+  source: Source;
+  id: string;
+  title: string;
+  company: string;
+  domain: string;
+  /** Plain text. micro1 only has this after the detail page is fetched. */
+  description: string | null;
+  skills: string[];
+  payMin: number | null;
+  payMax: number | null;
+  payUnit: string; // "hr", "task", "yr"...
+  commitment: string | null;
+  location: string;
+  postedAt: string | null;
+  /** Last edit to a still-open listing, when the source reports one. */
+  updatedAt?: string | null;
+  applyUrl: string;
+  /** ISO-3166 alpha-3 codes, or a plain country/region name when that is all the source gives. Empty = open to everyone. */
+  eligibleCountries: string[];
+  ineligibleCountries: string[];
+}
+
+export type Tier = "great" | "good" | "stretch";
+
+export interface ScoredJob extends Job {
+  score: number;
+  tier: Tier;
+  matchedSkills: string[];
+  eligible: boolean;
+  tailored: boolean;
+  applied: boolean;
+}
+
+export interface ResumeExperience {
+  company: string;
+  role: string;
+  dates: string;
+  location: string;
+  bullets: string[];
+}
+
+export interface TailoredResume {
+  name: string;
+  headline: string;
+  contact: string[];
+  summary: string;
+  experience: ResumeExperience[];
+  skills: { category: string; items: string[] }[];
+  openSource: { project: string; dates: string; links: string[]; bullets: string[] }[];
+  education: { title: string; institution: string; dates: string; details: string[] }[];
+  certifications: string[];
+  languages: string[];
+}
+
+export interface TailorResult {
+  fitSummary: string;
+  keywords: string[];
+  changes: string[];
+  gaps: string[];
+  resume: TailoredResume;
+}
+
+export interface StoredTailor {
+  jobKey: string;
+  jobTitle: string;
+  createdAt: string;
+  model: string;
+  result: TailorResult;
+}
