@@ -1,6 +1,6 @@
 import { currentUser, unauthorized } from "@/lib/auth";
 import { getJob, parseSource } from "@/lib/jobs";
-import { isEligible } from "@/lib/relevance";
+import { isEligible, jobTrack } from "@/lib/relevance";
 
 export const dynamic = "force-dynamic";
 
@@ -12,5 +12,5 @@ export async function GET(_request: Request, { params }: Context) {
   const source = parseSource(rawSource);
   const job = source ? await getJob(source, id) : null;
   if (!job) return Response.json({ error: "Job not found. It may have closed." }, { status: 404 });
-  return Response.json({ job: { ...job, eligible: isEligible(job) } });
+  return Response.json({ job: { ...job, eligible: isEligible(job), track: jobTrack(job) } });
 }

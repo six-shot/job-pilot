@@ -1,6 +1,11 @@
 # JobPilot
 
-Pulls live software roles from Mercor, micro1, Handshake AI and G2i, keeps the ones that fit your CV, and tailors the CV to any role with Claude.
+Finds roles you can apply to and tailors your CV to any of them with Claude. Three tabs:
+
+- **AI platforms** – software roles on Mercor, micro1, Handshake AI and G2i. This is the tab the app opens on.
+- **Frontend jobs** and **Mobile jobs** – roles scraped from remote job boards (Himalayas, Jobicy, Working Nomads, We Work Remotely, Remotive).
+
+Roles closed to your country, older than 30 days, or a stretch for your CV are hidden until you tick the filters.
 
 ## Run
 
@@ -34,7 +39,7 @@ A hosted copy has no Claude Code, so it needs the API key.
 ## Where things live
 
 - `lib/sources.ts` – one fetcher per platform. Add a platform by writing a function that returns `Job[]` and listing it in `getAllJobs`.
-- `lib/relevance.ts` – which jobs count as software roles, the fit score, and the country check (`HOME_COUNTRY`, default `NGA`).
+- `lib/relevance.ts` – which jobs count as software roles, which tab a title goes under (`jobTrack`), the fit score, and the country check (`HOME_COUNTRY`, default `NGA`).
 - `lib/tailor.ts` – the Claude prompt and output schema.
 - `lib/browser-store.ts` – what is saved in each person's browser.
 - `data/` – files from the original single-user version; the owner's browser imports them once.

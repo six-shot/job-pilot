@@ -17,7 +17,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "JobPilot",
-  description: "Software roles on Mercor, micro1, Handshake AI and G2i, with a CV tailored to each one.",
+  description: "Frontend and mobile roles from remote job boards and AI-work platforms, with a CV tailored to each one.",
 };
 
 export default async function RootLayout({ children }: LayoutProps<"/">) {

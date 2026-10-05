@@ -1,5 +1,16 @@
-export const SOURCES = ["mercor", "micro1", "handshake", "g2i"] as const;
+/** AI-work platforms: expert networks that staff engineers onto AI-training projects. */
+export const AI_SOURCES = ["mercor", "micro1", "handshake", "g2i"] as const;
+/** General remote job boards, searched for frontend and mobile roles. */
+export const BOARD_SOURCES = ["himalayas", "jobicy", "workingnomads", "weworkremotely", "remotive"] as const;
+export const SOURCES = [...AI_SOURCES, ...BOARD_SOURCES] as const;
 export type Source = (typeof SOURCES)[number];
+
+export function isAiSource(source: Source) {
+  return (AI_SOURCES as readonly string[]).includes(source);
+}
+
+/** Which tab a role belongs under; null when it is neither frontend nor mobile work. */
+export type Track = "frontend" | "mobile";
 
 export interface Job {
   key: string; // `${source}/${id}`
@@ -28,6 +39,7 @@ export interface Job {
 export type Tier = "great" | "good" | "stretch";
 
 export interface ScoredJob extends Job {
+  track: Track | null;
   score: number;
   tier: Tier;
   matchedSkills: string[];

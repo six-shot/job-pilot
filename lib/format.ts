@@ -48,6 +48,11 @@ export const SOURCE_LABEL: Record<Source, string> = {
   micro1: "micro1",
   handshake: "Handshake AI",
   g2i: "G2i",
+  himalayas: "Himalayas",
+  jobicy: "Jobicy",
+  workingnomads: "Working Nomads",
+  weworkremotely: "We Work Remotely",
+  remotive: "Remotive",
 };
 
 /** Plain-text version for pasting into application forms. */

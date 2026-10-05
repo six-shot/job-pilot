@@ -10,7 +10,7 @@ import { useUser } from "@/components/UserContext";
 import { getAllTailored, getApplied, getResume, importLocalFilesOnce } from "@/lib/browser-store";
 import type { ListedJob } from "@/lib/jobs";
 import { resumeSkills, scoreJob } from "@/lib/relevance";
-import { SOURCES, type ScoredJob, type Source } from "@/lib/types";
+import { AI_SOURCES, BOARD_SOURCES, SOURCES, isAiSource, type ScoredJob, type Source } from "@/lib/types";
 
 interface JobsResponse {
   jobs: ListedJob[];
@@ -27,6 +27,33 @@ interface MyData {
 
 type SourceFilter = "all" | Source;
 
+type Tab = "frontend" | "mobile" | "ai";
+
+const TABS: { value: Tab; label: string; blurb: string; inTab: (job: ScoredJob) => boolean }[] = [
+  {
+    value: "ai",
+    label: "AI platforms",
+    blurb: "software roles on Mercor, micro1, Handshake AI and G2i",
+    inTab: (job) => isAiSource(job.source),
+  },
+  {
+    value: "frontend",
+    label: "Frontend jobs",
+    blurb: "frontend and full-stack roles from job boards",
+    inTab: (job) => !isAiSource(job.source) && job.track === "frontend",
+  },
+  {
+    value: "mobile",
+    label: "Mobile jobs",
+    blurb: "mobile roles from job boards",
+    inTab: (job) => !isAiSource(job.source) && job.track === "mobile",
+  },
+];
+
+const TAB_KEY = "jobpilot:tab";
+
+const FULL_TIME = /full[\s-]?time/i;
+
 const AGE_OPTIONS = [
   { value: 7, label: "Last 7 days" },
   { value: 14, label: "Last 14 days" },
@@ -39,11 +66,6 @@ const NEW_WITHIN_DAYS = 7;
 
 const selectClass =
   "rounded-lg border border-zinc-300 bg-transparent px-2.5 py-2 text-sm outline-none focus:border-emerald-600 dark:border-zinc-700 dark:bg-zinc-900";
-
-const SOURCE_OPTIONS: { value: SourceFilter; label: string }[] = [
-  { value: "all", label: "All" },
-  ...SOURCES.map((value) => ({ value, label: SOURCE_LABEL[value] })),
-];
 
 function Toggle({
   checked,
@@ -128,12 +150,14 @@ export default function JobsPage() {
   const [mine, setMine] = useState<MyData>({ resume: "", tailored: new Set(), applied: new Set() });
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState<Tab>("ai");
   const [query, setQuery] = useState("");
   const [source, setSource] = useState<SourceFilter>("all");
   const [maxAge, setMaxAge] = useState(30);
   const [sort, setSort] = useState<"newest" | "fit">("newest");
   const [showStretch, setShowStretch] = useState(false);
   const [showIneligible, setShowIneligible] = useState(false);
+  const [fullTimeOnly, setFullTimeOnly] = useState(true);
 
   const load = useCallback(async (refresh = false) => {
     setLoading(true);
@@ -157,6 +181,19 @@ export default function JobsPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- initial fetch
     void load();
   }, [load]);
+
+  // Coming back from a job should land on the tab you left.
+  useEffect(() => {
+    const saved = sessionStorage.getItem(TAB_KEY);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- sessionStorage is client-only
+    if (TABS.some((t) => t.value === saved)) setTab(saved as Tab);
+  }, []);
+
+  function switchTab(next: Tab) {
+    setTab(next);
+    setSource("all");
+    sessionStorage.setItem(TAB_KEY, next);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -186,41 +223,60 @@ export default function JobsPage() {
     }));
   }, [data, mine]);
 
-  const visible = useMemo(() => {
-    if (!data) return [];
+  const activeTab = TABS.find((t) => t.value === tab)!;
+
+  // Everything that passes the filters, before the tab and source are applied.
+  const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const jobs = scored.filter(
+    return scored.filter(
       (job) =>
-        (source === "all" || job.source === source) &&
         (maxAge === 0 || (daysSince(lastActive(job)) ?? Infinity) <= maxAge) &&
         (showStretch || job.tier !== "stretch") &&
         (showIneligible || job.eligible) &&
+        // AI-platform work is contract by nature, so this only narrows the job-board tabs.
+        (!fullTimeOnly || isAiSource(job.source) || !job.commitment || FULL_TIME.test(job.commitment)) &&
         (!q || `${job.title} ${job.company} ${job.skills.join(" ")}`.toLowerCase().includes(q)),
+    );
+  }, [scored, query, maxAge, showStretch, showIneligible, fullTimeOnly]);
+
+  const visible = useMemo(() => {
+    const jobs = filtered.filter(
+      (job) => activeTab.inTab(job) && (source === "all" || job.source === source),
     );
     // The API returns newest first; sort() is stable, so ties keep that order.
     return sort === "fit" ? jobs.sort((a, b) => b.score - a.score) : jobs;
-  }, [data, scored, query, source, maxAge, sort, showStretch, showIneligible]);
+  }, [filtered, activeTab, source, sort]);
 
-  const hidden = scored.length - visible.length;
-  const inSource = data
-    ? scored.filter((job) => source === "all" || job.source === source).length
-    : 0;
+  const inTab = useMemo(() => scored.filter(activeTab.inTab), [scored, activeTab]);
+  const tabSources: readonly Source[] = tab === "ai" ? AI_SOURCES : BOARD_SOURCES;
+  const shownInTab = useMemo(() => filtered.filter(activeTab.inTab), [filtered, activeTab]);
+  const sections: { value: SourceFilter; label: string; count: number }[] = [
+    { value: "all", label: "All", count: shownInTab.length },
+    ...tabSources.map((value) => ({
+      value,
+      label: SOURCE_LABEL[value],
+      count: shownInTab.filter((job) => job.source === value).length,
+    })),
+  ];
+  const inSource = inTab.filter((job) => source === "all" || job.source === source).length;
+  const hidden = inSource - visible.length;
 
   function showEverything() {
     setQuery("");
     setMaxAge(0);
     setShowStretch(true);
     setShowIneligible(true);
+    setFullTimeOnly(false);
   }
 
   return (
     <div>
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Software roles for you</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Roles you can apply to</h1>
           <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
             {data
-              ? `${visible.length} roles shown, newest first, picked from ${data.totalListings} live listings on Mercor, micro1, Handshake AI and G2i.`
+              ? `${visible.length} ${activeTab.blurb} shown, ${sort === "fit" ? "best fit" : "newest"} first, picked from ${data.totalListings} live listings across ${SOURCES.length} sites.`
               : "Loading live listings…"}
           </p>
         </div>
@@ -229,7 +285,48 @@ export default function JobsPage() {
         </button>
       </div>
 
-      <div className={`${card} mt-4 flex flex-wrap items-center gap-x-5 gap-y-3 p-3`}>
+      <div role="tablist" className="mt-5 flex gap-1 border-b border-zinc-200 dark:border-zinc-800">
+        {TABS.map((t) => (
+          <button
+            key={t.value}
+            role="tab"
+            aria-selected={tab === t.value}
+            onClick={() => switchTab(t.value)}
+            className={`-mb-px flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-semibold ${
+              tab === t.value
+                ? "border-emerald-600 text-emerald-700 dark:text-emerald-400"
+                : "border-transparent text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-white"
+            }`}
+          >
+            {t.label}
+            {data && (
+              <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                {filtered.filter(t.inTab).length}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2" aria-label="Site">
+        {sections.map((section) => (
+          <button
+            key={section.value}
+            onClick={() => setSource(section.value)}
+            aria-pressed={source === section.value}
+            className={`flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-sm font-medium ${
+              source === section.value
+                ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                : "border-zinc-300 text-zinc-600 hover:text-zinc-950 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-white"
+            }`}
+          >
+            {section.label}
+            {data && <span className="text-xs opacity-70">{section.count}</span>}
+          </button>
+        ))}
+      </div>
+
+      <div className={`${card} mt-3 flex flex-wrap items-center gap-x-5 gap-y-3 p-3`}>
         <input
           type="search"
           value={query}
@@ -238,22 +335,6 @@ export default function JobsPage() {
           aria-label="Search jobs"
           className="min-w-52 flex-1 rounded-lg border border-zinc-300 bg-transparent px-3 py-2 text-sm outline-none focus:border-emerald-600 dark:border-zinc-700"
         />
-        <div className="flex rounded-lg border border-zinc-300 p-0.5 dark:border-zinc-700">
-          {SOURCE_OPTIONS.map((option) => (
-            <button
-              key={option.value}
-              onClick={() => setSource(option.value)}
-              aria-pressed={source === option.value}
-              className={`rounded-md px-3 py-1.5 text-sm font-medium ${
-                source === option.value
-                  ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                  : "text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-white"
-              }`}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
         <select
           value={maxAge}
           onChange={(e) => setMaxAge(Number(e.target.value))}
@@ -278,6 +359,11 @@ export default function JobsPage() {
         <Toggle checked={showStretch} onChange={setShowStretch}>
           Show stretch roles
         </Toggle>
+        {tab !== "ai" && (
+          <Toggle checked={fullTimeOnly} onChange={setFullTimeOnly}>
+            Full-time only
+          </Toggle>
+        )}
         <Toggle checked={showIneligible} onChange={setShowIneligible}>
           Show roles closed to Nigeria
         </Toggle>
@@ -318,10 +404,10 @@ export default function JobsPage() {
           {inSource > 0 ? (
             <>
               <p>
-                {source === "all" ? "There are" : `${SOURCE_LABEL[source]} has`} {inSource} software{" "}
-                {inSource === 1 ? "role" : "roles"}, but the filters above hide{" "}
-                {inSource === 1 ? "it" : "them"} (older than the time range, a stretch for your CV, or
-                closed to Nigeria).
+                {source === "all" ? "There are" : `${SOURCE_LABEL[source]} has`} {inSource}{" "}
+                {activeTab.blurb}, but the filters above hide{" "}
+                {inSource === 1 ? "it" : "them"} (older than the time range, a stretch for your CV,
+                not full-time, or closed to Nigeria).
               </p>
               <button onClick={showEverything} className={`${buttonSecondary} mt-3`}>
                 Show all {inSource}
@@ -329,7 +415,7 @@ export default function JobsPage() {
             </>
           ) : (
             <p>
-              {source === "all" ? "No software roles found" : `${SOURCE_LABEL[source]} has no software roles listed`}{" "}
+              {source === "all" ? `No ${activeTab.blurb} found` : `${SOURCE_LABEL[source]} has none listed`}{" "}
               right now. Try Refresh.
             </p>
           )}
@@ -337,7 +423,7 @@ export default function JobsPage() {
       )}
       {data && visible.length > 0 && hidden > 0 && (
         <p className="mt-6 text-center text-xs text-zinc-500">
-          {hidden} other software roles are hidden by the filters above.
+          {hidden} other {activeTab.blurb} are hidden by the filters above.
         </p>
       )}
     </div>

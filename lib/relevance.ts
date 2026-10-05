@@ -1,9 +1,9 @@
-import type { Job, Tier } from "./types";
+import type { Job, Tier, Track } from "./types";
 
 /** ISO-3166 alpha-3 of where you live. Roles closed to this country are flagged. */
 export const HOME_COUNTRY = process.env.HOME_COUNTRY ?? "NGA";
 /** Matches the same country where a source names it in words instead of a code. */
-const HOME_COUNTRY_NAME = new RegExp(process.env.HOME_COUNTRY_NAME ?? "nigeria|^africa$|worldwide|global|anywhere", "i");
+const HOME_COUNTRY_NAME = new RegExp(process.env.HOME_COUNTRY_NAME ?? "nigeria|^africa$|^emea$|worldwide|global|anywhere", "i");
 
 const SOFTWARE_DOMAINS = new Set(["Software Engineering", "software-engineering"]);
 
@@ -57,7 +57,27 @@ const GENERAL_TITLE =
   /software engineer|\bswe\b|developer|coder|coding|\bcode\b|agent engineer|programm/i;
 // Software roles that need a specialty the CV doesn't show.
 const OFF_LANE_TITLE =
-  /secur|cyber|\bcve\b|kernel|\bgpu\b|firmware|cad\b|mlops|devops|kubernetes|\bcloud\b|serverless|data scien|data analyst|machine learning|\bml\b|c#|\.net|\blean\b|customer success|interviewer|android|kotlin|backend|back-end|competitive|puzzle|application users|\bindia\b|latam/i;
+  /secur|cyber|\bcve\b|kernel|\bgpu\b|firmware|cad\b|mlops|devops|kubernetes|\bcloud\b|serverless|data scien|data analyst|machine learning|\bml\b|c#|\.net|\blean\b|customer success|interviewer|android|kotlin|\bios\b|swift|flutter|backend|back-end|\bjava\b|ruby|rails|\bphp\b|laravel|drupal|wordpress|shopify|golang|angular|principal|\bstaff\b|architect|competitive|puzzle|application users|\bindia\b|latam/i;
+// A React Native title is in lane even when it also names iOS or Android.
+const REACT_NATIVE_TITLE = /react[\s-]native|\bexpo\b/i;
+
+const MOBILE_TITLE = /react[\s-]native|\bexpo\b|\bmobile\b|\bios\b|android|flutter/i;
+const FRONTEND_TITLE =
+  /front[\s-]?end|\breact|next\.?js|\bvue|javascript|typescript|\bweb3?\b|\bui\b|full[\s-]?stack/i;
+const BUILDER_TITLE = /engineer|developer|\bdev\b|programmer|desarrollador|contributor|coder/i;
+// Roles around engineering rather than in it.
+const NOT_BUILDER_TITLE =
+  /manager|director|head of|\bdesign|recruit|writer|marketing|sales|advocate|analyst|\bqa\b|tester|test automation|support|expression of interest/i;
+
+export function jobTrack(job: Pick<Job, "title">): Track | null {
+  const { title } = job;
+  if (!BUILDER_TITLE.test(title) || NOT_BUILDER_TITLE.test(title)) return null;
+  if (REACT_NATIVE_TITLE.test(title)) return "mobile";
+  // "Frontend Engineer - React, Flutter" is a frontend role that mentions a mobile stack.
+  if (/front[\s-]?end/i.test(title)) return "frontend";
+  if (MOBILE_TITLE.test(title)) return "mobile";
+  return FRONTEND_TITLE.test(title) ? "frontend" : null;
+}
 
 export function resumeSkills(resume: string) {
   return VOCAB.filter(([, re]) => re.test(resume)).map(([label]) => label);
@@ -90,7 +110,7 @@ export function scoreJob(job: Job, mySkills: string[]) {
   let score = Math.min(matchedSkills.length * 5, 35);
   if (STRONG_TITLE.test(job.title)) score += 50;
   else if (GENERAL_TITLE.test(job.title)) score += 25;
-  if (OFF_LANE_TITLE.test(job.title)) score -= 30;
+  if (OFF_LANE_TITLE.test(job.title) && !REACT_NATIVE_TITLE.test(job.title)) score -= 30;
   score = Math.max(0, Math.min(100, score));
 
   const tier: Tier = score >= 55 ? "great" : score >= 30 ? "good" : "stretch";

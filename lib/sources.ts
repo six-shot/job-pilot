@@ -137,6 +137,11 @@ export async function getAllJobs(force = false) {
     ["micro1", fetchMicro1],
     ["Handshake AI", fetchHandshake],
     ["G2i", fetchG2i],
+    ["Himalayas", fetchHimalayas],
+    ["Jobicy", fetchJobicy],
+    ["Working Nomads", fetchWorkingNomads],
+    ["We Work Remotely", fetchWeWorkRemotely],
+    ["Remotive", fetchRemotive],
   ];
   const results = await Promise.allSettled(sources.map(([, load]) => load()));
   const jobs: Job[] = [];
@@ -162,6 +167,8 @@ function htmlToText(html: string) {
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#39;|&apos;/g, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(Number(dec)))
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -449,4 +456,283 @@ async function fetchG2i(): Promise<Job[]> {
       ineligibleCountries: [],
     };
   });
+}
+
+// ---------------------------------------------------------------------------
+// Remote job boards
+//
+// These list every kind of role, so each one is queried for frontend and mobile
+// work only; lib/jobs.ts then keeps the titles that really are one or the other.
+// ---------------------------------------------------------------------------
+
+async function fetchJson<T>(url: string) {
+  return JSON.parse(await fetchText(url)) as T;
+}
+
+/** "LATAM,  UK,  USA" -> ["LATAM", "UK", "USA"] */
+function splitRegions(value: string | null | undefined) {
+  return (value ?? "")
+    .split(/[,;]/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function dedupe(jobs: Job[]) {
+  const seen = new Set<string>();
+  return jobs.filter((job) => !seen.has(job.key) && seen.add(job.key));
+}
+
+const USD = (currency: string | null | undefined) => !currency || currency === "USD";
+
+interface HimalayasJob {
+  title: string;
+  companyName: string;
+  employmentType: string | null;
+  minSalary: number | null;
+  maxSalary: number | null;
+  salaryPeriod: string | null;
+  currency: string | null;
+  locationRestrictions: string[] | null;
+  description: string | null;
+  pubDate: number;
+  applicationLink: string;
+  guid: string;
+}
+
+const HIMALAYAS_QUERIES = ["frontend", "react", "react native", "mobile developer"];
+const HIMALAYAS_PAGES = 5; // 20 per page
+const HIMALAYAS_COUNTRY = (process.env.HOME_COUNTRY_ALPHA2 ?? "NG").toUpperCase();
+
+async function fetchHimalayas(): Promise<Job[]> {
+  // The country filter returns roles open to that country, worldwide ones included.
+  const search = async (q: string) => {
+    const found: HimalayasJob[] = [];
+    for (let page = 1; page <= HIMALAYAS_PAGES; page++) {
+      const data = await fetchJson<{ jobs: HimalayasJob[] }>(
+        `https://himalayas.app/jobs/api/search?q=${encodeURIComponent(q)}&country=${HIMALAYAS_COUNTRY}&sort=recent&page=${page}`,
+      );
+      found.push(...data.jobs);
+      // A full page is 20, but pages can come back one short, so only stop well under that.
+      if (data.jobs.length < 10) break;
+    }
+    return found;
+  };
+  const results = await Promise.allSettled(HIMALAYAS_QUERIES.map(search));
+  const listings = results.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
+  if (listings.length === 0) {
+    const failed = results.find((r) => r.status === "rejected");
+    if (failed) throw failed.reason;
+  }
+  return dedupe(
+    listings.map((j) => {
+      // guid: https://himalayas.app/companies/<company>/jobs/<slug>
+      const id = j.guid.replace(/^.*\/companies\//, "").replace("/jobs/", "~");
+      return {
+        key: `himalayas/${id}`,
+        source: "himalayas" as const,
+        id,
+        title: j.title.trim(),
+        company: j.companyName,
+        domain: "",
+        description: j.description ? htmlToText(j.description) : null,
+        skills: [],
+        payMin: USD(j.currency) ? j.minSalary : null,
+        payMax: USD(j.currency) ? j.maxSalary : null,
+        payUnit: j.salaryPeriod === "hourly" ? "hr" : j.salaryPeriod === "monthly" ? "mo" : "yr",
+        commitment: j.employmentType?.toLowerCase() ?? null,
+        location: j.locationRestrictions?.join(", ") || "Remote",
+        postedAt: new Date(j.pubDate * 1000).toISOString(),
+        applyUrl: j.applicationLink,
+        eligibleCountries: j.locationRestrictions ?? [],
+        ineligibleCountries: [],
+      };
+    }),
+  );
+}
+
+interface JobicyJob {
+  id: number;
+  url: string;
+  jobTitle: string;
+  companyName: string;
+  jobType: string[] | null;
+  jobGeo: string | null;
+  jobDescription: string | null;
+  pubDate: string;
+  salaryMin?: number | null;
+  salaryMax?: number | null;
+  salaryCurrency?: string | null;
+  salaryPeriod?: string | null;
+}
+
+const JOBICY_TAGS = ["frontend", "react", "react native", "mobile"];
+const JOBICY_PERIODS: Record<string, string> = { yearly: "yr", monthly: "mo", weekly: "wk", hourly: "hr" };
+
+async function fetchJobicy(): Promise<Job[]> {
+  const results = await Promise.allSettled(
+    JOBICY_TAGS.map((tag) =>
+      fetchJson<{ jobs?: JobicyJob[] }>(
+        `https://jobicy.com/api/v2/remote-jobs?count=100&tag=${encodeURIComponent(tag)}`,
+      ),
+    ),
+  );
+  const listings = results.flatMap((r) => (r.status === "fulfilled" ? (r.value.jobs ?? []) : []));
+  if (listings.length === 0) {
+    const failed = results.find((r) => r.status === "rejected");
+    if (failed) throw failed.reason;
+  }
+  return dedupe(
+    listings.map((j) => {
+      const paid = USD(j.salaryCurrency) && (j.salaryMin || j.salaryMax);
+      return {
+        key: `jobicy/${j.id}`,
+        source: "jobicy" as const,
+        id: String(j.id),
+        title: htmlToText(j.jobTitle),
+        company: htmlToText(j.companyName),
+        domain: "",
+        description: j.jobDescription ? htmlToText(j.jobDescription) : null,
+        skills: [],
+        payMin: paid ? (j.salaryMin ?? null) : null,
+        payMax: paid ? (j.salaryMax ?? null) : null,
+        payUnit: JOBICY_PERIODS[j.salaryPeriod ?? ""] ?? "yr",
+        commitment: j.jobType?.join(", ").toLowerCase() || null,
+        location: j.jobGeo ?? "Remote",
+        postedAt: j.pubDate,
+        applyUrl: j.url,
+        eligibleCountries: splitRegions(j.jobGeo),
+        ineligibleCountries: [],
+      };
+    }),
+  );
+}
+
+interface WorkingNomadsJob {
+  id: number;
+  title: string;
+  slug: string;
+  company: string;
+  description: string | null;
+  position_type: string | null;
+  tags: string[] | null;
+  locations: string[] | null;
+  pub_date: string;
+  expired: boolean;
+  annual_salary_usd: number | null;
+}
+
+const WORKING_NOMADS_TITLES =
+  'frontend OR "front end" OR react OR "react native" OR mobile OR javascript OR typescript OR "full stack" OR fullstack OR web';
+const WORKING_NOMADS_TYPES: Record<string, string> = { ft: "full-time", pt: "part-time", co: "contract" };
+
+async function fetchWorkingNomads(): Promise<Job[]> {
+  const data = await fetchJson<{ hits: { hits: { _source: WorkingNomadsJob }[] } }>(
+    `https://www.workingnomads.com/jobsapi/_search?size=300&sort=pub_date:desc&q=${encodeURIComponent(
+      `title:(${WORKING_NOMADS_TITLES})`,
+    )}`,
+  );
+  return data.hits.hits
+    .map((hit) => hit._source)
+    .filter((j) => !j.expired)
+    .map((j) => ({
+      key: `workingnomads/${j.id}`,
+      source: "workingnomads" as const,
+      id: String(j.id),
+      title: j.title.trim(),
+      company: j.company,
+      domain: "",
+      description: j.description ? htmlToText(j.description) : null,
+      skills: j.tags ?? [],
+      payMin: j.annual_salary_usd,
+      payMax: j.annual_salary_usd,
+      payUnit: "yr",
+      commitment: WORKING_NOMADS_TYPES[j.position_type ?? ""] ?? null,
+      location: j.locations?.join(", ") || "Remote",
+      postedAt: new Date(j.pub_date).toISOString(),
+      applyUrl: `https://www.workingnomads.com/jobs/${j.slug}`,
+      eligibleCountries: j.locations ?? [],
+      ineligibleCountries: [],
+    }));
+}
+
+const WWR_FEEDS = [
+  "https://weworkremotely.com/categories/remote-front-end-programming-jobs.rss",
+  "https://weworkremotely.com/categories/remote-full-stack-programming-jobs.rss",
+];
+
+function xmlTag(item: string, tag: string) {
+  const raw = item.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`))?.[1] ?? "";
+  return raw.replace(/^<!\[CDATA\[|\]\]>$/g, "").trim();
+}
+
+async function fetchWeWorkRemotely(): Promise<Job[]> {
+  const results = await Promise.allSettled(WWR_FEEDS.map(fetchText));
+  const feeds = results.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+  if (feeds.length === 0) throw (results[0] as PromiseRejectedResult).reason;
+  const jobs: Job[] = [];
+  for (const item of feeds.flatMap((xml) => xml.split("<item>").slice(1))) {
+    const link = xmlTag(item, "link");
+    const id = link.match(/remote-jobs\/([\w-]+)/)?.[1];
+    // Titles read "Company: Role".
+    const [, company, title] = htmlToText(xmlTag(item, "title")).match(/^(.*?):\s+(.*)$/) ?? [];
+    if (!id || !title) continue;
+    const region = htmlToText(xmlTag(item, "region"));
+    const posted = new Date(xmlTag(item, "pubDate"));
+    jobs.push({
+      key: `weworkremotely/${id}`,
+      source: "weworkremotely",
+      id,
+      title,
+      company,
+      domain: "",
+      // The description is HTML that the feed escapes once more.
+      description: htmlToText(htmlToText(xmlTag(item, "description"))) || null,
+      skills: splitRegions(htmlToText(xmlTag(item, "skills")).replace(/,? and /, ", ")),
+      payMin: null,
+      payMax: null,
+      payUnit: "",
+      commitment: xmlTag(item, "type").toLowerCase() || null,
+      location: region || "Remote",
+      postedAt: Number.isNaN(posted.getTime()) ? null : posted.toISOString(),
+      applyUrl: link,
+      eligibleCountries: splitRegions(region),
+      ineligibleCountries: [],
+    });
+  }
+  return dedupe(jobs);
+}
+
+interface RemotiveJob {
+  id: number;
+  url: string;
+  title: string;
+  company_name: string;
+  tags: string[] | null;
+  job_type: string | null;
+  publication_date: string;
+  candidate_required_location: string | null;
+  description: string | null;
+}
+
+async function fetchRemotive(): Promise<Job[]> {
+  const { jobs } = await fetchJson<{ jobs: RemotiveJob[] }>("https://remotive.com/api/remote-jobs");
+  return jobs.map((j) => ({
+    key: `remotive/${j.id}`,
+    source: "remotive" as const,
+    id: String(j.id),
+    title: j.title.trim(),
+    company: j.company_name.trim(),
+    domain: "",
+    description: j.description ? htmlToText(j.description) : null,
+    skills: j.tags ?? [],
+    payMin: null,
+    payMax: null,
+    payUnit: "",
+    commitment: j.job_type?.replace(/_/g, "-") ?? null,
+    location: j.candidate_required_location || "Remote",
+    postedAt: `${j.publication_date}Z`,
+    applyUrl: j.url,
+    eligibleCountries: splitRegions(j.candidate_required_location),
+    ineligibleCountries: [],
+  }));
 }

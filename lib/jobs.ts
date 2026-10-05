@@ -1,19 +1,26 @@
 import { lastActive } from "./format";
-import { isEligible, isSoftwareJob } from "./relevance";
+import { isEligible, isSoftwareJob, jobTrack } from "./relevance";
 import { getAllJobs, getMicro1Description } from "./sources";
-import { SOURCES, type Job, type Source } from "./types";
+import { SOURCES, isAiSource, type Job, type Source, type Track } from "./types";
 
-export type ListedJob = Job & { eligible: boolean };
+export type ListedJob = Job & { eligible: boolean; track: Track | null };
 
 /** Software roles from every source, newest first. The browser scores them against its CV. */
 export async function getSoftwareJobs(force = false) {
   const { jobs, errors, at } = await getAllJobs(force);
-  const listed: ListedJob[] = jobs.filter(isSoftwareJob).map((job) => ({
-    ...job,
-    // Enough text for skill matching; the detail route returns the full description.
-    description: job.description ? job.description.slice(0, 2000) : null,
-    eligible: isEligible(job),
-  }));
+  const listed: ListedJob[] = [];
+  for (const job of jobs) {
+    const track = jobTrack(job);
+    // Job boards carry every kind of role, so only their frontend and mobile ones are kept.
+    if (isAiSource(job.source) ? !isSoftwareJob(job) : !track) continue;
+    listed.push({
+      ...job,
+      // Enough text for skill matching; the detail route returns the full description.
+      description: job.description ? job.description.slice(0, 2000) : null,
+      eligible: isEligible(job),
+      track,
+    });
+  }
   listed.sort((a, b) => (lastActive(b) ?? "").localeCompare(lastActive(a) ?? ""));
   return { jobs: listed, errors, fetchedAt: at, totalListings: jobs.length };
 }

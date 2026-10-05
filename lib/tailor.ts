@@ -6,7 +6,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { SOURCE_LABEL } from "./format";
-import type { Job, TailorResult } from "./types";
+import { isAiSource, type Job, type TailorResult } from "./types";
 
 export const TAILOR_MODEL = "claude-opus-5-5";
 
@@ -51,9 +51,15 @@ const TailorSchema = z.object({
   }),
 });
 
-const SYSTEM = `You tailor one candidate's CV to one specific job posting on an AI-work platform such as Mercor, micro1, Handshake AI or G2i.
+const AI_PLATFORM_CONTEXT = `You tailor one candidate's CV to one specific job posting on an AI-work platform such as Mercor, micro1, Handshake AI or G2i.
 
-Context on these platforms: they are expert networks that staff software engineers onto AI-training and evaluation projects (writing and reviewing code, judging model output, building benchmark tasks) as well as contract engineering roles. Applications are screened first by automated resume matching against the posting and then by an AI-led interview that probes whatever the CV claims. So the CV has to make the relevant evidence obvious in the posting's own vocabulary, and every claim on it has to survive follow-up questions.
+Context on these platforms: they are expert networks that staff software engineers onto AI-training and evaluation projects (writing and reviewing code, judging model output, building benchmark tasks) as well as contract engineering roles. Applications are screened first by automated resume matching against the posting and then by an AI-led interview that probes whatever the CV claims. So the CV has to make the relevant evidence obvious in the posting's own vocabulary, and every claim on it has to survive follow-up questions.`;
+
+const JOB_BOARD_CONTEXT = `You tailor one candidate's CV to one specific job posting found on a remote job board.
+
+Context: the posting is for a role at the named company, and the candidate applies through that company's own form. Applications are usually screened first by applicant-tracking software matching the CV against the posting, then by a recruiter who skims it for under a minute, then in interviews that probe whatever the CV claims. So the CV has to make the relevant evidence obvious in the posting's own vocabulary, and every claim on it has to survive follow-up questions.`;
+
+const RULES = `
 
 The candidate's CV is the only source of truth about them. Tailoring means selecting, reordering, re-emphasising and rewording what is already there:
 - Lead with the experience, projects and skills that matter most for this posting, and trim or drop bullets that don't help.
@@ -72,13 +78,17 @@ Fill the output fields as follows:
 - gaps: requirements in the posting that the CV doesn't evidence. Empty if there are none.
 - resume: the complete tailored CV. contact holds each contact item as its own string (email, phone, location, links).`;
 
+function systemPrompt(job: Job) {
+  return (isAiSource(job.source) ? AI_PLATFORM_CONTEXT : JOB_BOARD_CONTEXT) + "\n" + RULES;
+}
+
 function jobBlock(job: Job) {
   const pay =
     job.payMin != null
       ? `$${job.payMin}${job.payMax && job.payMax !== job.payMin ? `–$${job.payMax}` : ""}/${job.payUnit}`
       : "not listed";
   const lines = [
-    `Platform: ${SOURCE_LABEL[job.source]}`,
+    `${isAiSource(job.source) ? "Platform" : "Found on"}: ${SOURCE_LABEL[job.source]}`,
     `Title: ${job.title}`,
     `Company: ${job.company}`,
     `Pay: ${pay}`,
@@ -127,12 +137,16 @@ async function tailorWithApi(
   job: Job,
   onProgress: (chars: number) => void,
 ): Promise<TailorResult> {
-  const client = new Anthropic();
+  // Keys that aren't tied to one workspace must say which workspace to bill.
+  const workspace = process.env.ANTHROPIC_WORKSPACE_ID;
+  const client = new Anthropic(
+    workspace ? { defaultHeaders: { "anthropic-workspace-id": workspace } } : {},
+  );
   try {
     const stream = client.messages.stream({
       model: TAILOR_MODEL,
       max_tokens: 32000,
-      system: SYSTEM,
+      system: systemPrompt(job),
       output_config: { effort: "high", format: zodOutputFormat(TailorSchema) },
       messages: [{ role: "user", content: userPrompt(resume, job) }],
     });
@@ -155,6 +169,11 @@ async function tailorWithApi(
   } catch (error) {
     if (error instanceof Anthropic.AuthenticationError) {
       throw new TailorError("Anthropic rejected the API key. Check ANTHROPIC_API_KEY in .env.local.");
+    }
+    if (error instanceof Anthropic.APIError && /not scoped to a workspace/i.test(error.message)) {
+      throw new TailorError(
+        "Your Anthropic API key isn't tied to a workspace. Either create a key inside a workspace at console.anthropic.com and put it in ANTHROPIC_API_KEY, or add ANTHROPIC_WORKSPACE_ID=<your workspace id> to .env.local, then restart the app.",
+      );
     }
     if (error instanceof Anthropic.RateLimitError) {
       throw new TailorError("Rate limited by the Anthropic API. Wait a minute and try again.");
@@ -221,7 +240,7 @@ function tailorWithClaudeCode(resume: string, job: Job): Promise<TailorResult> {
         "-p",
         "--output-format", "json",
         "--model", TAILOR_MODEL,
-        "--system-prompt", SYSTEM,
+        "--system-prompt", systemPrompt(job),
         "--json-schema", JSON.stringify(schema),
         "--tools", "",
         "--setting-sources", "",
