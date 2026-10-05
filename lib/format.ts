@@ -5,7 +5,7 @@ export function formatPay(job: Pick<Job, "payMin" | "payMax" | "payUnit">) {
   const money = (n: number) => `$${n.toLocaleString("en-US")}`;
   const min = job.payMin ?? job.payMax!;
   const max = job.payMax ?? job.payMin!;
-  const range = min === max ? money(min) : `${money(min)}–${money(max)}`;
+  const range = min === max ? money(min) : `${money(min)}-${money(max)}`;
   return job.payUnit ? `${range}/${job.payUnit}` : range;
 }
 
@@ -37,6 +37,27 @@ export function activityLabel(job: Pick<Job, "postedAt" | "updatedAt">) {
   return `${when === job.postedAt ? "posted" : "updated"} ${timeAgo(when)}`;
 }
 
+/** Em and en dashes read as machine-written, so they are swapped for plain punctuation. */
+export function plainDashes(text: string) {
+  return text
+    .replace(/(\d)\s*[\u2013\u2014]\s*(\d)/g, "$1-$2")
+    .replace(/\s*\u2014\s*/g, ", ")
+    .replace(/\s\u2013\s/g, " - ")
+    .replace(/\u2013/g, "-");
+}
+
+/** Applies plainDashes to every string inside a value. */
+export function deepPlainDashes<T>(value: T): T {
+  if (typeof value === "string") return plainDashes(value) as T;
+  if (Array.isArray(value)) return value.map(deepPlainDashes) as T;
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, deepPlainDashes(item)]),
+    ) as T;
+  }
+  return value;
+}
+
 export const TIER_LABEL: Record<Tier, string> = {
   great: "Great fit",
   good: "Good fit",
@@ -61,7 +82,7 @@ export function resumeToText(r: TailoredResume) {
   if (r.experience.length) {
     out.push("", "PROFESSIONAL EXPERIENCE");
     for (const e of r.experience) {
-      out.push("", `${e.company} — ${e.role}`, [e.dates, e.location].filter(Boolean).join(" | "));
+      out.push("", `${e.company}, ${e.role}`, [e.dates, e.location].filter(Boolean).join(" | "));
       out.push(...e.bullets.map((b) => `- ${b}`));
     }
   }

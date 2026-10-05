@@ -36,10 +36,22 @@ With `ANTHROPIC_API_KEY` set, tailoring uses API credits. Without it, the app ca
 
 A hosted copy has no Claude Code, so it needs the API key.
 
+## Cover letters and downloads
+
+On a job page you can tailor your CV and, for applications that ask for one, write a cover letter. **Download CV** and **Download cover letter** save PDFs into `exports/<Company name>/` in this folder, so each application's files sit together. Set `EXPORT_DIR` in `.env.local` to keep them somewhere else (for example `~/Documents/Job applications`). A hosted copy has no disk of its own, so there the buttons download through the browser instead.
+
+## How the writing is steered
+
+- **Company research** – with an API key, Claude first searches the web for the company (what it makes, its stack, what it values) and uses that to decide what to bring forward. The findings are shown on the job page.
+- **Writing skills** – `lib/skills.ts` holds the standing instructions every CV and letter follows: plain human wording, no stock phrases, and no em dashes (which are also stripped in code).
+
 ## Where things live
 
 - `lib/sources.ts` – one fetcher per platform. Add a platform by writing a function that returns `Job[]` and listing it in `getAllJobs`.
 - `lib/relevance.ts` – which jobs count as software roles, which tab a title goes under (`jobTrack`), the fit score, and the country check (`HOME_COUNTRY`, default `NGA`).
-- `lib/tailor.ts` – the Claude prompt and output schema.
+- `lib/tailor.ts` – the Claude prompts and output schemas for the CV and the cover letter.
+- `lib/skills.ts` – the human-voice and company-fit writing instructions.
+- `lib/company.ts` – the web research on the employer.
+- `lib/pdf.ts` – lays out the CV and cover letter PDFs and saves them.
 - `lib/browser-store.ts` – what is saved in each person's browser.
 - `data/` – files from the original single-user version; the owner's browser imports them once.

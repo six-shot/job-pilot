@@ -10,12 +10,37 @@ import { useUser } from "@/components/UserContext";
 import * as mine from "@/lib/browser-store";
 import { resumeSkills, scoreJob } from "@/lib/relevance";
 import { SOURCE_LABEL, activityLabel, formatPay, resumeToText, timeAgo } from "@/lib/format";
-import type { ScoredJob, StoredTailor } from "@/lib/types";
+import { letterPdf, letterToText, resumePdf, savePdf } from "@/lib/pdf";
+import type { ScoredJob, StoredLetter, StoredTailor } from "@/lib/types";
 
 type TailorEvent =
   | { type: "progress"; chars: number }
   | { type: "done"; tailored: StoredTailor }
   | { type: "error"; message: string };
+
+type LetterEvent =
+  | { type: "progress"; chars: number }
+  | { type: "done"; letter: StoredLetter }
+  | { type: "error"; message: string };
+
+/** Reads a newline-delimited JSON response, handing each event to `onEvent`. */
+async function readEvents<T>(res: Response, onEvent: (event: T) => void) {
+  if (!res.ok || !res.body) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.error ?? `Request failed (${res.status})`);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines.filter(Boolean)) onEvent(JSON.parse(line) as T);
+  }
+}
 
 function InsightList({ title, items }: { title: string; items: string[] }) {
   if (!items.length) return null;
@@ -42,6 +67,11 @@ export default function JobPage({ params }: PageProps<"/jobs/[source]/[id]">) {
   const [progress, setProgress] = useState(0);
   const [tailorError, setTailorError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [letter, setLetter] = useState<StoredLetter | null>(null);
+  const [writingLetter, setWritingLetter] = useState(false);
+  const [letterError, setLetterError] = useState<string | null>(null);
+  const [letterCopied, setLetterCopied] = useState(false);
+  const [saved, setSaved] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -63,6 +93,7 @@ export default function JobPage({ params }: PageProps<"/jobs/[source]/[id]">) {
             applied: key in mine.getApplied(user),
           });
           setTailored(mine.getTailored(user, key));
+          setLetter(mine.getLetter(user, key));
         }
       })
       .catch(() => !cancelled && setLoadError("Couldn't load this job."));
@@ -86,36 +117,82 @@ export default function JobPage({ params }: PageProps<"/jobs/[source]/[id]">) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ source, id, resume }),
       });
-      if (!res.ok || !res.body) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.error ?? `Request failed (${res.status})`);
-      }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
       let finished = false;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines.filter(Boolean)) {
-          const event = JSON.parse(line) as TailorEvent;
-          if (event.type === "progress") setProgress(event.chars);
-          else if (event.type === "done") {
-            mine.saveTailored(user, event.tailored);
-            setTailored(event.tailored);
-            finished = true;
-          } else throw new Error(event.message);
-        }
-      }
+      await readEvents<TailorEvent>(res, (event) => {
+        if (event.type === "progress") setProgress(event.chars);
+        else if (event.type === "done") {
+          mine.saveTailored(user, event.tailored);
+          setTailored(event.tailored);
+          finished = true;
+        } else throw new Error(event.message);
+      });
       if (!finished) throw new Error("The connection closed before the CV was ready. Try again.");
     } catch (e) {
       setTailorError(e instanceof Error ? e.message : "Something went wrong.");
     } finally {
       setTailoring(false);
     }
+  }
+
+  async function writeLetter() {
+    const resume = mine.getResume(user) ?? "";
+    if (!resume.trim()) {
+      setLetterError("Add your CV on the My CV page first.");
+      return;
+    }
+    setWritingLetter(true);
+    setLetterError(null);
+    try {
+      const res = await fetch("/api/cover-letter", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source, id, resume }),
+      });
+      let finished = false;
+      await readEvents<LetterEvent>(res, (event) => {
+        if (event.type === "done") {
+          mine.saveLetter(user, event.letter);
+          setLetter(event.letter);
+          finished = true;
+        } else if (event.type === "error") throw new Error(event.message);
+      });
+      if (!finished) throw new Error("The connection closed before the letter was ready. Try again.");
+    } catch (e) {
+      setLetterError(e instanceof Error ? e.message : "Something went wrong.");
+    } finally {
+      setWritingLetter(false);
+    }
+  }
+
+  async function downloadCv() {
+    if (!tailored || !job) return;
+    setSaved(await savePdf(resumePdf(tailored.result.resume, job.company), job.company));
+  }
+
+  async function downloadLetter() {
+    if (!letter || !job) return;
+    setSaved(await savePdf(letterPdf(letter.letter, letterhead(), job), job.company));
+  }
+
+  async function copyLetter() {
+    if (!letter) return;
+    await navigator.clipboard.writeText(letterToText(letter.letter, letterhead().name));
+    setLetterCopied(true);
+    setTimeout(() => setLetterCopied(false), 2000);
+  }
+
+  /** Name and contact lines for the letter: from the tailored CV, else the top of the CV as typed. */
+  function letterhead() {
+    if (tailored) return tailored.result.resume;
+    const [name = "", headline = "", ...rest] = (mine.getResume(user) ?? "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const contact = rest
+      .slice(0, 2)
+      .filter((line) => /@|https?:|www\.|\+?\d{7,}/.test(line))
+      .flatMap((line) => line.split("•").map((part) => part.trim()));
+    return { name, headline, contact };
   }
 
   function toggleApplied() {
@@ -186,6 +263,38 @@ export default function JobPage({ params }: PageProps<"/jobs/[source]/[id]">) {
         </div>
       </div>
 
+      <div className={`${card} mt-5 flex flex-wrap items-center gap-2 p-3`}>
+        <span className="mr-1 text-sm font-semibold">What do you want to do?</span>
+        <button onClick={tailor} disabled={tailoring} className={buttonPrimary}>
+          {tailoring ? "Tailoring…" : tailored ? "Tailor CV again" : "Tailor my CV"}
+        </button>
+        <button onClick={writeLetter} disabled={writingLetter} className={buttonSecondary}>
+          {writingLetter ? "Writing…" : letter ? "Rewrite cover letter" : "Write cover letter"}
+        </button>
+        {tailored && (
+          <button
+            onClick={downloadCv}
+            className={buttonSecondary}
+          >
+            Download CV
+          </button>
+        )}
+        {letter && (
+          <button
+            onClick={downloadLetter}
+            className={buttonSecondary}
+          >
+            Download cover letter
+          </button>
+        )}
+      </div>
+
+      {saved && (
+        <p role="status" className="mt-3 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+          {saved}
+        </p>
+      )}
+
       <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
         <section className={`${card} h-fit p-5`}>
           <h2 className="text-sm font-semibold">About the role</h2>
@@ -228,14 +337,12 @@ export default function JobPage({ params }: PageProps<"/jobs/[source]/[id]">) {
                     <button onClick={copyText} className={buttonSecondary}>
                       {copied ? "Copied" : "Copy text"}
                     </button>
-                    <a
-                      href={`/print/${source}/${id}`}
-                      target="_blank"
-                      rel="noreferrer"
+                    <button
+                      onClick={downloadCv}
                       className={buttonSecondary}
                     >
-                      Save as PDF
-                    </a>
+                      Download CV
+                    </button>
                   </>
                 )}
                 <button onClick={tailor} disabled={tailoring} className={buttonPrimary}>
@@ -247,7 +354,7 @@ export default function JobPage({ params }: PageProps<"/jobs/[source]/[id]">) {
             {tailoring && (
               <p role="status" className="mt-4 text-sm text-zinc-600 dark:text-zinc-400">
                 {progress === 0
-                  ? "Claude is reading the posting and rewriting your CV. This takes a minute or two…"
+                  ? "Claude is reading up on the company, then rewriting your CV. This takes a couple of minutes…"
                   : `Writing your CV… ${progress.toLocaleString()} characters so far`}
               </p>
             )}
@@ -275,11 +382,79 @@ export default function JobPage({ params }: PageProps<"/jobs/[source]/[id]">) {
                     </div>
                   </div>
                 )}
+                {tailored?.companyBrief && (
+                  <div>
+                    <h3 className="text-sm font-semibold">What I found about {job.company}</h3>
+                    <p className="mt-1 text-sm whitespace-pre-wrap text-zinc-700 dark:text-zinc-300">
+                      {tailored.companyBrief}
+                    </p>
+                  </div>
+                )}
                 <InsightList title="What changed" items={result.changes} />
                 <InsightList title="Gaps to prepare for" items={result.gaps} />
               </div>
             )}
           </div>
+
+          {!tailoring && (
+            <div className={`${card} mt-4 p-5`}>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold">Cover letter</h2>
+                  <p className="mt-0.5 text-xs text-zinc-500">
+                    {letter
+                      ? `Written ${timeAgo(letter.createdAt)}`
+                      : "Only if this application asks for one. Written from your real CV."}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {letter && (
+                    <>
+                      <button onClick={copyLetter} className={buttonSecondary}>
+                        {letterCopied ? "Copied" : "Copy text"}
+                      </button>
+                      <button
+                        onClick={downloadLetter}
+                        className={buttonSecondary}
+                      >
+                        Download cover letter
+                      </button>
+                    </>
+                  )}
+                  <button
+                    onClick={writeLetter}
+                    disabled={writingLetter}
+                    className={letter ? buttonSecondary : buttonPrimary}
+                  >
+                    {writingLetter ? "Writing…" : letter ? "Write again" : "Write cover letter"}
+                  </button>
+                </div>
+              </div>
+              {writingLetter && (
+                <p role="status" className="mt-4 text-sm text-zinc-600 dark:text-zinc-400">
+                  Claude is writing your cover letter. This takes under a minute…
+                </p>
+              )}
+              {letterError && (
+                <p className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
+                  {letterError}
+                </p>
+              )}
+              {letter && !writingLetter && (
+                <div className="mt-4 space-y-3 border-t border-zinc-200 pt-4 text-sm leading-relaxed text-zinc-700 dark:border-zinc-800 dark:text-zinc-300">
+                  <p>{letter.letter.greeting}</p>
+                  {letter.letter.paragraphs.map((paragraph, i) => (
+                    <p key={i}>{paragraph}</p>
+                  ))}
+                  <p>
+                    {letter.letter.signOff}
+                    <br />
+                    {letterhead().name}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
 
           {tailoring && (
             <div className="mt-4 rounded-xl border border-zinc-200 bg-white p-6 sm:p-8 dark:border-zinc-800 dark:bg-zinc-900">

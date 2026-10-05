@@ -82,5 +82,22 @@ export interface StoredTailor {
   jobTitle: string;
   createdAt: string;
   model: string;
+  /** What was found out about the employer before tailoring, when research ran. */
+  companyBrief?: string | null;
   result: TailorResult;
+}
+
+export interface CoverLetter {
+  greeting: string;
+  paragraphs: string[];
+  signOff: string;
+}
+
+export interface StoredLetter {
+  jobKey: string;
+  jobTitle: string;
+  company: string;
+  createdAt: string;
+  companyBrief?: string | null;
+  letter: CoverLetter;
 }

@@ -43,7 +43,7 @@ export function ResumeView({ resume }: { resume: TailoredResume }) {
             <div key={i} className="mt-3 break-inside-avoid">
               <div className="flex flex-wrap items-baseline justify-between gap-x-4">
                 <h3 className="font-semibold">
-                  {e.company} — {e.role}
+                  {e.company}, {e.role}
                 </h3>
                 <span className="text-xs text-zinc-600">{e.dates}</span>
               </div>
@@ -91,7 +91,7 @@ export function ResumeView({ resume }: { resume: TailoredResume }) {
             <div key={i} className="mt-3 break-inside-avoid">
               <div className="flex flex-wrap items-baseline justify-between gap-x-4">
                 <h3 className="font-semibold">
-                  {[e.title, e.institution].filter(Boolean).join(" — ")}
+                  {[e.title, e.institution].filter(Boolean).join(", ")}
                 </h3>
                 <span className="text-xs text-zinc-600">{e.dates}</span>
               </div>

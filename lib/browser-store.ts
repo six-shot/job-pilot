@@ -1,6 +1,7 @@
 "use client";
 
-import type { StoredTailor } from "./types";
+import { deepPlainDashes } from "./format";
+import type { StoredLetter, StoredTailor } from "./types";
 
 /**
  * Each person's CV, tailored CVs and applied list live in their own browser,
@@ -30,11 +31,19 @@ function write(user: string, name: string, value: unknown) {
 export const getResume = (user: string) => read<string | null>(user, "resume", null);
 export const saveResume = (user: string, text: string) => write(user, "resume", text);
 
+// CVs and letters saved before dashes were banned are cleaned as they are read.
 export const getAllTailored = (user: string) =>
-  read<Record<string, StoredTailor>>(user, "tailored", {});
+  deepPlainDashes(read<Record<string, StoredTailor>>(user, "tailored", {}));
 export const getTailored = (user: string, jobKey: string) => getAllTailored(user)[jobKey] ?? null;
 export function saveTailored(user: string, entry: StoredTailor) {
   return write(user, "tailored", { ...getAllTailored(user), [entry.jobKey]: entry });
+}
+
+export const getLetter = (user: string, jobKey: string) =>
+  deepPlainDashes(read<Record<string, StoredLetter>>(user, "letters", {})[jobKey] ?? null);
+export function saveLetter(user: string, entry: StoredLetter) {
+  const all = read<Record<string, StoredLetter>>(user, "letters", {});
+  return write(user, "letters", { ...all, [entry.jobKey]: entry });
 }
 
 export const getApplied = (user: string) => read<Record<string, string>>(user, "applied", {});

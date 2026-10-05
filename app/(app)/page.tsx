@@ -93,7 +93,10 @@ function JobCard({ job }: { job: ScoredJob }) {
   const href = `/jobs/${job.source}/${job.id}`;
   const age = daysSince(lastActive(job));
   return (
-    <li className={`${card} flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between`}>
+    // The title link is stretched over the whole card, so clicking anywhere opens the job.
+    <li
+      className={`${card} relative flex flex-col gap-3 p-4 transition-colors hover:border-emerald-600 sm:flex-row sm:items-start sm:justify-between dark:hover:border-emerald-500`}
+    >
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           {age !== null && age <= NEW_WITHIN_DAYS && (
@@ -117,7 +120,10 @@ function JobCard({ job }: { job: ScoredJob }) {
             </Pill>
           )}
         </div>
-        <Link href={href} className="mt-2 block text-base font-semibold hover:underline">
+        <Link
+          href={href}
+          className="mt-2 block text-base font-semibold after:absolute after:inset-0 after:rounded-xl"
+        >
           {job.title}
         </Link>
         <p className="mt-0.5 text-sm text-zinc-600 dark:text-zinc-400">
@@ -131,9 +137,9 @@ function JobCard({ job }: { job: ScoredJob }) {
           </p>
         )}
       </div>
-      <div className="flex shrink-0 gap-2">
+      <div className="relative z-10 flex shrink-0 gap-2">
         <Link href={href} className={buttonPrimary}>
-          {job.tailored ? "View CV" : "Tailor CV"}
+          View details
         </Link>
         <a href={job.applyUrl} target="_blank" rel="noreferrer" className={buttonSecondary}>
           Apply ↗
