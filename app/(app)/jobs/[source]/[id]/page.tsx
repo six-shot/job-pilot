@@ -11,7 +11,7 @@ import * as mine from "@/lib/browser-store";
 import { resumeSkills, scoreJob } from "@/lib/relevance";
 import { SOURCE_LABEL, activityLabel, formatPay, resumeToText, timeAgo } from "@/lib/format";
 import { letterPdf, letterToText, resumePdf, savePdf } from "@/lib/pdf";
-import type { ScoredJob, StoredLetter, StoredTailor } from "@/lib/types";
+import type { ScoredJob, StoredAnswer, StoredLetter, StoredTailor } from "@/lib/types";
 
 type TailorEvent =
   | { type: "progress"; chars: number }
@@ -72,6 +72,11 @@ export default function JobPage({ params }: PageProps<"/jobs/[source]/[id]">) {
   const [letterError, setLetterError] = useState<string | null>(null);
   const [letterCopied, setLetterCopied] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
+  const [answers, setAnswers] = useState<StoredAnswer[]>([]);
+  const [questionText, setQuestionText] = useState("");
+  const [answering, setAnswering] = useState(false);
+  const [answerError, setAnswerError] = useState<string | null>(null);
+  const [copiedAnswer, setCopiedAnswer] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -94,6 +99,7 @@ export default function JobPage({ params }: PageProps<"/jobs/[source]/[id]">) {
           });
           setTailored(mine.getTailored(user, key));
           setLetter(mine.getLetter(user, key));
+          setAnswers(mine.getAnswers(user, key));
         }
       })
       .catch(() => !cancelled && setLoadError("Couldn't load this job."));
@@ -162,6 +168,58 @@ export default function JobPage({ params }: PageProps<"/jobs/[source]/[id]">) {
     } finally {
       setWritingLetter(false);
     }
+  }
+
+  async function answerQuestions() {
+    if (!job) return;
+    const resume = mine.getResume(user) ?? "";
+    // One question per line; numbering or bullets pasted from a form are dropped.
+    const questions = questionText
+      .split("\n")
+      .map((line) => line.replace(/^\s*(?:\d+[.)]|[-*•])\s*/, "").trim())
+      .filter(Boolean);
+    if (!resume.trim()) {
+      setAnswerError("Add your CV on the My CV page first.");
+      return;
+    }
+    if (!questions.length) {
+      setAnswerError("Paste or type at least one question.");
+      return;
+    }
+    setAnswering(true);
+    setAnswerError(null);
+    try {
+      const res = await fetch("/api/answers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source, id, resume, questions }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(body?.error ?? `Request failed (${res.status})`);
+      // Newest first, and asking a question again replaces its old answer.
+      const fresh = body.answers as StoredAnswer[];
+      const next = [...fresh, ...answers.filter((a) => !fresh.some((f) => f.question === a.question))];
+      mine.saveAnswers(user, job.key, next);
+      setAnswers(next);
+      setQuestionText("");
+    } catch (e) {
+      setAnswerError(e instanceof Error ? e.message : "Something went wrong.");
+    } finally {
+      setAnswering(false);
+    }
+  }
+
+  function removeAnswer(index: number) {
+    if (!job) return;
+    const next = answers.filter((_, i) => i !== index);
+    mine.saveAnswers(user, job.key, next);
+    setAnswers(next);
+  }
+
+  async function copyAnswer(index: number) {
+    await navigator.clipboard.writeText(answers[index].answer);
+    setCopiedAnswer(index);
+    setTimeout(() => setCopiedAnswer(null), 2000);
   }
 
   async function downloadCv() {
@@ -455,6 +513,64 @@ export default function JobPage({ params }: PageProps<"/jobs/[source]/[id]">) {
               )}
             </div>
           )}
+
+          <div className={`${card} mt-4 p-5`}>
+            <h2 className="text-sm font-semibold">Application questions</h2>
+            <p className="mt-0.5 text-xs text-zinc-500">
+              Paste the questions from the application form, one per line. Answers come from your
+              real CV and this job.
+            </p>
+            <textarea
+              value={questionText}
+              onChange={(e) => setQuestionText(e.target.value)}
+              rows={3}
+              placeholder={"Why do you want to work here?\nTell us about a project you're proud of."}
+              aria-label="Application questions"
+              className="mt-3 w-full rounded-lg border border-zinc-300 bg-transparent px-3 py-2 text-sm outline-none focus:border-emerald-600 dark:border-zinc-700"
+            />
+            <div className="mt-2 flex items-center gap-3">
+              <button onClick={answerQuestions} disabled={answering} className={buttonPrimary}>
+                {answering ? "Answering…" : "Answer questions"}
+              </button>
+              {answering && (
+                <span role="status" className="text-sm text-zinc-600 dark:text-zinc-400">
+                  This takes about a minute…
+                </span>
+              )}
+            </div>
+            {answerError && (
+              <p className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
+                {answerError}
+              </p>
+            )}
+            {answers.length > 0 && (
+              <ul className="mt-4 space-y-4 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+                {answers.map((item, i) => (
+                  <li key={item.question}>
+                    <div className="flex items-start justify-between gap-3">
+                      <h3 className="text-sm font-semibold">{item.question}</h3>
+                      <div className="flex shrink-0 gap-3 text-xs">
+                        <button onClick={() => copyAnswer(i)} className="font-medium text-emerald-700 hover:underline dark:text-emerald-400">
+                          {copiedAnswer === i ? "Copied" : "Copy"}
+                        </button>
+                        <button onClick={() => removeAnswer(i)} className="text-zinc-500 hover:underline">
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                    <p className="mt-1 text-sm leading-relaxed whitespace-pre-wrap text-zinc-700 dark:text-zinc-300">
+                      {item.answer}
+                    </p>
+                    {item.note && (
+                      <p className="mt-2 rounded-lg bg-amber-50 p-2.5 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+                        Before you send: {item.note}
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
 
           {tailoring && (
             <div className="mt-4 rounded-xl border border-zinc-200 bg-white p-6 sm:p-8 dark:border-zinc-800 dark:bg-zinc-900">

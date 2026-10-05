@@ -190,6 +190,41 @@ export function writeCoverLetter(
   });
 }
 
+const AnswersSchema = z.object({
+  answers: z.array(z.object({ question: z.string(), answer: z.string(), note: z.string() })),
+});
+
+const ANSWERS_SYSTEM = `You answer the questions on a job application form for one candidate, in their own voice.
+
+The candidate's CV is the only source of truth about them. Use only employers, projects, technologies, numbers and outcomes that appear in it, exactly as stated. Never invent an experience, a story, a skill or a figure to make an answer stronger. If a question asks about something the CV doesn't show, answer honestly from the closest real experience and say plainly where the limit is, the way a sensible person would in an interview.
+
+Some questions can only be answered by the candidate: salary expectations, notice period, start date, visa or work authorisation, willingness to relocate, links you don't have, why they left a job, anything personal. Don't guess these. Write the answer as far as the CV allows (for example their location), keep it short, and use the note to tell the candidate exactly what they need to add or decide. Leave the note empty when the answer is ready to send.
+
+${HUMAN_VOICE}
+
+Answer the question that was asked, in the first person, starting with the answer itself rather than a warm-up. Match the length to the question: a sentence or two for a factual question, and roughly 60 to 130 words for an open one such as "why do you want this role" or "tell us about a project you're proud of", unless the question sets its own limit, in which case stay inside it. For questions about a past project or a challenge, tell one real example from the CV with what the situation was, what they did and what came of it. Plain text only, no bullet points or headings unless the question asks for a list.
+
+Return one entry per question, in the order given, repeating each question exactly as it was asked.`;
+
+export async function answerQuestions(
+  resume: string,
+  job: Job,
+  brief: string | null,
+  questions: string[],
+) {
+  const { answers } = await ask({
+    system:
+      ANSWERS_SYSTEM +
+      (brief
+        ? `\n\n${COMPANY_FIT}\n\nFor questions about why this company or this role, connect something true about what the company does to something real in the candidate's experience. Don't praise the company.`
+        : ""),
+    prompt: `${material(resume, job, brief)}\n\n<questions>\n${questions.map((q, i) => `${i + 1}. ${q}`).join("\n")}\n</questions>\n\nAnswer these application questions.`,
+    schema: AnswersSchema,
+    onProgress: () => {},
+  });
+  return answers;
+}
+
 /** Keys that aren't tied to one workspace must say which workspace to bill. */
 export function apiClient() {
   const workspace = process.env.ANTHROPIC_WORKSPACE_ID;

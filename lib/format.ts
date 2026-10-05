@@ -69,6 +69,8 @@ export const SOURCE_LABEL: Record<Source, string> = {
   micro1: "micro1",
   handshake: "Handshake AI",
   g2i: "G2i",
+  linkedin: "LinkedIn",
+  hackernews: "Hacker News",
   himalayas: "Himalayas",
   jobicy: "Jobicy",
   workingnomads: "Working Nomads",

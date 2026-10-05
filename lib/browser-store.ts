@@ -1,7 +1,7 @@
 "use client";
 
 import { deepPlainDashes } from "./format";
-import type { StoredLetter, StoredTailor } from "./types";
+import type { StoredAnswer, StoredLetter, StoredTailor } from "./types";
 
 /**
  * Each person's CV, tailored CVs and applied list live in their own browser,
@@ -44,6 +44,13 @@ export const getLetter = (user: string, jobKey: string) =>
 export function saveLetter(user: string, entry: StoredLetter) {
   const all = read<Record<string, StoredLetter>>(user, "letters", {});
   return write(user, "letters", { ...all, [entry.jobKey]: entry });
+}
+
+export const getAnswers = (user: string, jobKey: string) =>
+  read<Record<string, StoredAnswer[]>>(user, "answers", {})[jobKey] ?? [];
+export function saveAnswers(user: string, jobKey: string, answers: StoredAnswer[]) {
+  const all = read<Record<string, StoredAnswer[]>>(user, "answers", {});
+  return write(user, "answers", { ...all, [jobKey]: answers });
 }
 
 export const getApplied = (user: string) => read<Record<string, string>>(user, "applied", {});

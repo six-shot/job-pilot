@@ -1,7 +1,15 @@
 /** AI-work platforms: expert networks that staff engineers onto AI-training projects. */
 export const AI_SOURCES = ["mercor", "micro1", "handshake", "g2i"] as const;
 /** General remote job boards, searched for frontend and mobile roles. */
-export const BOARD_SOURCES = ["himalayas", "jobicy", "workingnomads", "weworkremotely", "remotive"] as const;
+export const BOARD_SOURCES = [
+  "linkedin",
+  "himalayas",
+  "jobicy",
+  "workingnomads",
+  "weworkremotely",
+  "remotive",
+  "hackernews",
+] as const;
 export const SOURCES = [...AI_SOURCES, ...BOARD_SOURCES] as const;
 export type Source = (typeof SOURCES)[number];
 
@@ -100,4 +108,12 @@ export interface StoredLetter {
   createdAt: string;
   companyBrief?: string | null;
   letter: CoverLetter;
+}
+
+export interface StoredAnswer {
+  question: string;
+  answer: string;
+  /** Something only the candidate can supply or should check before sending. Empty when there is nothing. */
+  note: string;
+  createdAt: string;
 }

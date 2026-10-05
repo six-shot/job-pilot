@@ -1,6 +1,6 @@
 import { lastActive } from "./format";
 import { isEligible, isSoftwareJob, jobTrack } from "./relevance";
-import { getAllJobs, getMicro1Description } from "./sources";
+import { getAllJobs, getLinkedInDetail, getMicro1Description } from "./sources";
 import { SOURCES, isAiSource, type Job, type Source, type Track } from "./types";
 
 export type ListedJob = Job & { eligible: boolean; track: Track | null };
@@ -31,6 +31,9 @@ export async function getJob(source: Source, id: string): Promise<Job | null> {
   if (!job) return null;
   if (source === "micro1" && !job.description) {
     return { ...job, description: await getMicro1Description(id).catch(() => null) };
+  }
+  if (source === "linkedin" && !job.description) {
+    return { ...job, ...((await getLinkedInDetail(id).catch(() => null)) ?? {}) };
   }
   return job;
 }

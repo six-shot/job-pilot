@@ -3,7 +3,7 @@
 Finds roles you can apply to and tailors your CV to any of them with Claude. Three tabs:
 
 - **AI platforms** – software roles on Mercor, micro1, Handshake AI and G2i. This is the tab the app opens on.
-- **Frontend jobs** and **Mobile jobs** – roles scraped from remote job boards (Himalayas, Jobicy, Working Nomads, We Work Remotely, Remotive).
+- **Frontend jobs** and **Mobile jobs** – roles scraped from remote job boards (LinkedIn, Himalayas, Jobicy, Working Nomads, We Work Remotely, Remotive and the Hacker News "Who is hiring?" thread).
 
 Roles closed to your country, older than 30 days, or a stretch for your CV are hidden until you tick the filters.
 

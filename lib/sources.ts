@@ -142,6 +142,8 @@ export async function getAllJobs(force = false) {
     ["Working Nomads", fetchWorkingNomads],
     ["We Work Remotely", fetchWeWorkRemotely],
     ["Remotive", fetchRemotive],
+    ["LinkedIn", fetchLinkedIn],
+    ["Hacker News", fetchHackerNews],
   ];
   const results = await Promise.allSettled(sources.map(([, load]) => load()));
   const jobs: Job[] = [];
@@ -735,4 +737,182 @@ async function fetchRemotive(): Promise<Job[]> {
     eligibleCountries: splitRegions(j.candidate_required_location),
     ineligibleCountries: [],
   }));
+}
+
+// ---------------------------------------------------------------------------
+// LinkedIn
+//
+// The public job search that LinkedIn shows to signed-out visitors, read as HTML.
+// It is fetched gently (few pages, results kept for an hour) because LinkedIn
+// blocks clients that ask too often.
+// ---------------------------------------------------------------------------
+
+const LINKEDIN_SEARCH = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search";
+const LINKEDIN_KEYWORDS = ["frontend developer", "react developer", "react native developer", "mobile developer"];
+/** Jobs based in the home country, plus remote ones (f_WT=2) open across the wider region. */
+const LINKEDIN_PLACES = [
+  { location: process.env.HOME_COUNTRY_FULL_NAME ?? "Nigeria", remote: false, pages: 4 },
+  { location: "Africa", remote: true, pages: 1 },
+  { location: "EMEA", remote: true, pages: 1 },
+]; // 10 results per page
+const LINKEDIN_CACHE_MS = 60 * 60 * 1000;
+
+let linkedInCache: { at: number; jobs: Job[] } | null = null;
+
+function parseLinkedInCards(html: string, remote: boolean): Job[] {
+  const jobs: Job[] = [];
+  for (const card of html.split("<li>").slice(1)) {
+    const pick = (re: RegExp) => htmlToText(card.match(re)?.[1] ?? "");
+    const id = card.match(/urn:li:jobPosting:(\d+)/)?.[1];
+    const title = pick(/base-search-card__title[^>]*>([\s\S]*?)<\/h3>/);
+    if (!id || !title) continue;
+    const location = pick(/job-search-card__location[^>]*>([\s\S]*?)<\/span>/);
+    const posted = card.match(/datetime="([^"]+)"/)?.[1];
+    jobs.push({
+      key: `linkedin/${id}`,
+      source: "linkedin",
+      id,
+      title,
+      company: pick(/base-search-card__subtitle[^>]*>([\s\S]*?)<\/h4>/) || "Company on LinkedIn",
+      domain: "",
+      description: null, // fetched with the job's own page
+      skills: [],
+      payMin: null,
+      payMax: null,
+      payUnit: "",
+      commitment: null,
+      location: remote ? `${location} (remote)` : location,
+      postedAt: posted ? new Date(posted).toISOString() : null,
+      applyUrl: `https://www.linkedin.com/jobs/view/${id}`,
+      // A LinkedIn "remote" role is still tied to the place it is listed in.
+      eligibleCountries: location ? [location] : [],
+      ineligibleCountries: [],
+    });
+  }
+  return jobs;
+}
+
+async function fetchLinkedIn(): Promise<Job[]> {
+  if (linkedInCache && Date.now() - linkedInCache.at < LINKEDIN_CACHE_MS) return linkedInCache.jobs;
+  const found: Job[] = [];
+  let failure: unknown = null;
+  // One search at a time: parallel requests are what gets a client blocked.
+  for (const place of LINKEDIN_PLACES) {
+    for (const keywords of LINKEDIN_KEYWORDS) {
+      for (let page = 0; page < place.pages; page++) {
+        const query = new URLSearchParams({
+          keywords,
+          location: place.location,
+          f_TPR: "r2592000", // posted in the last 30 days
+          sortBy: "DD",
+          start: String(page * 10),
+          ...(place.remote ? { f_WT: "2" } : {}),
+        });
+        try {
+          const cards = parseLinkedInCards(await fetchText(`${LINKEDIN_SEARCH}?${query}`), place.remote);
+          found.push(...cards);
+          if (cards.length < 10) break;
+        } catch (error) {
+          failure = error;
+          break;
+        }
+      }
+    }
+  }
+  if (found.length === 0) {
+    // Blocked or down: keep showing the last good set rather than nothing.
+    if (linkedInCache) return linkedInCache.jobs;
+    if (failure) throw failure;
+  }
+  linkedInCache = { at: Date.now(), jobs: dedupe(found) };
+  return linkedInCache.jobs;
+}
+
+const linkedInDetails = new Map<string, Pick<Job, "description" | "commitment">>();
+
+/** The description and employment type, which only the posting's own page carries. */
+export async function getLinkedInDetail(id: string) {
+  const hit = linkedInDetails.get(id);
+  if (hit) return hit;
+  const html = await fetchText(`https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/${id}`);
+  const description = htmlToText(
+    html.match(/show-more-less-html__markup[^>]*>([\s\S]*?)<\/div>/)?.[1] ?? "",
+  );
+  if (!description) return null;
+  const criteria = [...html.matchAll(/description__job-criteria-text[^>]*>([\s\S]*?)<\/span>/g)].map(
+    (m) => htmlToText(m[1]),
+  );
+  const detail = {
+    description,
+    commitment: criteria.find((c) => /time|contract|temporary|intern/i.test(c))?.toLowerCase() ?? null,
+  };
+  linkedInDetails.set(id, detail);
+  return detail;
+}
+
+// ---------------------------------------------------------------------------
+// Hacker News "Who is hiring?"
+//
+// A monthly thread where each top-level comment is one company's posting,
+// usually headed "Company | Role | Location | Remote". Read through the Algolia API.
+// ---------------------------------------------------------------------------
+
+interface HnComment {
+  objectID: string;
+  author: string;
+  comment_text: string | null;
+  created_at: string;
+  parent_id: number;
+}
+
+const HN_API = "https://hn.algolia.com/api/v1/search_by_date";
+const HN_ROLE = /engineer|developer|\bdev\b|programmer/i;
+const HN_OPEN_TO_ALL = /worldwide|global|anywhere|\bafrica\b|\bemea\b|nigeria/i;
+
+async function fetchHackerNews(): Promise<Job[]> {
+  const threads = await fetchJson<{ hits: { objectID: string; title: string }[] }>(
+    `${HN_API}?tags=story,author_whoishiring&hitsPerPage=6`,
+  );
+  const thread = threads.hits.find((hit) => /who is hiring/i.test(hit.title));
+  if (!thread) return [];
+  const { hits } = await fetchJson<{ hits: HnComment[] }>(
+    `${HN_API}?tags=comment,story_${thread.objectID}&hitsPerPage=1000`,
+  );
+  const jobs: Job[] = [];
+  for (const comment of hits) {
+    // Replies to a posting are not postings.
+    if (String(comment.parent_id) !== thread.objectID || !comment.comment_text) continue;
+    const text = htmlToText(comment.comment_text.replace(/<p>/g, "\n\n"));
+    const parts = text.split("\n")[0].split("|").map((part) => part.trim()).filter(Boolean);
+    if (parts.length < 2) continue;
+    // A header can list several roles; take the one in the candidate's lane if there is one.
+    const roles = parts.slice(1).filter((part) => HN_ROLE.test(part) && part.length < 90);
+    const title =
+      roles.find((role) => /front|react|web|mobile|full[\s-]?stack|\bui\b/i.test(role)) ?? roles[0];
+    if (!title) continue;
+    const where = parts.find((part) => /remote|onsite|on-site|hybrid/i.test(part) && part !== title) ?? "";
+    const remote = /remote/i.test(text) && !/no remote|not remote/i.test(text);
+    jobs.push({
+      key: `hackernews/${comment.objectID}`,
+      source: "hackernews",
+      id: comment.objectID,
+      title,
+      company: parts[0].replace(/\s*\(.*$/, "").slice(0, 60),
+      domain: "",
+      description: text,
+      skills: [],
+      payMin: null,
+      payMax: null,
+      payUnit: "",
+      commitment: /full[\s-]?time/i.test(text) ? "full-time" : /contract/i.test(text) ? "contract" : null,
+      location: where || (remote ? "Remote" : "See posting"),
+      postedAt: comment.created_at,
+      applyUrl: `https://news.ycombinator.com/item?id=${comment.objectID}`,
+      // Most postings are remote within a country or onsite; only clearly global ones count as open.
+      eligibleCountries:
+        remote && HN_OPEN_TO_ALL.test(parts.join(" ")) ? [] : [where || "Location in posting"],
+      ineligibleCountries: [],
+    });
+  }
+  return jobs;
 }
